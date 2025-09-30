@@ -1,20 +1,13 @@
-#!/usr/bin/env python3
-# solve_simpleai_enum_plot.py
-# SimpleAI: tìm tất cả nghiệm CSP (liệt kê bằng backtrack lặp) và vẽ mặt f(x,y)
-
 from simpleai.search import CspProblem, backtrack, MOST_CONSTRAINED_VARIABLE, LEAST_CONSTRAINING_VALUE
 import matplotlib.pyplot as plt
 import numpy as np
 
-# --- cấu hình lưới ---
 grid = [i * 0.5 for i in range(-10, 11)]  # -5..5 step 0.5
 TOL = 1e-9
 
-# --- hàm mục tiêu ---
 def f_val(x, y):
     return abs((x + 1) * (x - 1) * (x - 2) + y * (y - 1))
 
-# --- ràng buộc dưới dạng hàm (signature: variables, values) ---
 def constraint_circle(vars_, vals):
     x, y = vals
     return abs(x * x + y * y - 1.0) <= TOL
@@ -23,7 +16,6 @@ def constraint_linear(vars_, vals):
     x, y = vals
     return x >= 2 * y - 1e-9
 
-# --- xây dựng CspProblem đúng API của SimpleAI ---
 variables = ('x', 'y')
 domains = {'x': grid, 'y': grid}
 constraints = [
@@ -33,28 +25,24 @@ constraints = [
 
 problem = CspProblem(variables, domains, constraints)
 
-# --- enumerate mọi nghiệm hợp lệ: chạy backtrack lặp và thêm ràng buộc chặn nghiệm đã tìm ---
 solutions = []
 while True:
     sol = backtrack(problem,
                     variable_heuristic=MOST_CONSTRAINED_VARIABLE,
                     value_heuristic=LEAST_CONSTRAINING_VALUE,
-                    inference=True)  # inference=True => AC3
+                    inference=True)
     if not sol:
         break
     solutions.append(sol)
 
-    # thêm ràng buộc chặn nghiệm vừa tìm (block this exact (x,y))
-    tx = sol['x']; ty = sol['y']
+    tx, ty = sol['x'], sol['y']
     def make_blocker(tx_val, ty_val):
         def blocker(vars_, vals):
             x, y = vals
-            # trả về False (vi phạm) nếu đúng là nghiệm đã tìm; True ngược lại
             return not (abs(x - tx_val) < 1e-9 and abs(y - ty_val) < 1e-9)
         return blocker
     problem.constraints.append((('x', 'y'), make_blocker(tx, ty)))
 
-# --- in kết quả và chọn cực tiểu theo f ---
 evaluated = [(f_val(s['x'], s['y']), s['x'], s['y']) for s in solutions]
 evaluated.sort(key=lambda t: t[0])
 
@@ -70,25 +58,28 @@ if evaluated:
 else:
     print("Không tìm được nghiệm nào thoả ràng buộc.")
 
-# --- VẼ trực quan: mặt 3D + các điểm lý thuyết + nghiệm hợp lệ ---
+# ========== Vẽ biểu diễn trực quan giống hình bạn gửi ==========
 X = np.linspace(-5, 5, 240)
 Y = np.linspace(-5, 5, 240)
 X, Y = np.meshgrid(X, Y)
 Z = np.abs((X + 1) * (X - 1) * (X - 2) + Y * (Y - 1))
 
+# lấy log để giống hình
+Z_log = np.log1p(Z)
+
 fig = plt.figure(figsize=(11, 7))
 ax = fig.add_subplot(111, projection='3d')
-ax.plot_surface(X, Y, Z, cmap='viridis', alpha=0.75)
+ax.plot_surface(X, Y, Z_log, cmap='viridis', alpha=0.75)
 
-# 4 cực tiểu "lý thuyết" (từ đề bài, chưa xét ràng buộc)
+# các cực tiểu lý thuyết
 theoretical_minima = [(1,1), (1,0), (2,1), (2,0)]
 for xx, yy in theoretical_minima:
-    ax.scatter(xx, yy, f_val(xx, yy), color='red', s=60)
+    ax.scatter(xx, yy, np.log1p(f_val(xx, yy)), color='red', s=60)
 
-# nghiệm hợp lệ tìm được
+# nghiệm tìm được từ CSP
 for _, x, y in evaluated:
-    ax.scatter(x, y, f_val(x, y), color='blue', s=100, marker='^')
+    ax.scatter(x, y, np.log1p(f_val(x, y)), color='blue', s=100, marker='^')
 
-ax.set_title("Mặt f(x,y) và các điểm: đỏ=4 cực tiểu lý thuyết, xanh=nghiệm hợp lệ (CSP)")
-ax.set_xlabel("x"); ax.set_ylabel("y"); ax.set_zlabel("f(x,y)")
+ax.set_title("Biểu diễn log1p(f(x,y)) và các cực tiểu")
+ax.set_xlabel("x"); ax.set_ylabel("y"); ax.set_zlabel("log1p(f(x,y))")
 plt.show()
