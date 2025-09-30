@@ -1,226 +1,94 @@
 #!/usr/bin/env python3
-# csp_minimize.py
-# Giải bài toán CSP và tìm điểm cực tiểu của f(x,y) trên lưới -5..5 step 0.5
-# Với ràng buộc: x >= 2y, x^2 + y^2 = 1
-# Tùy chọn: MRV, AC3, value ordering
+# solve_simpleai_enum_plot.py
+# SimpleAI: tìm tất cả nghiệm CSP (liệt kê bằng backtrack lặp) và vẽ mặt f(x,y)
 
-from copy import deepcopy
-from itertools import product
+from simpleai.search import CspProblem, backtrack, MOST_CONSTRAINED_VARIABLE, LEAST_CONSTRAINING_VALUE
+import matplotlib.pyplot as plt
+import numpy as np
 
-# --- Cấu hình ---
-GRID_MIN = -5.0
-GRID_MAX = 5.0
-GRID_STEP = 0.5
+# --- cấu hình lưới ---
+grid = [i * 0.5 for i in range(-10, 11)]  # -5..5 step 0.5
+TOL = 1e-9
 
-TOL = 1e-9  # dung sai cho so sánh số thực
-
-
-# --- Hàm mục tiêu ---
+# --- hàm mục tiêu ---
 def f_val(x, y):
     return abs((x + 1) * (x - 1) * (x - 2) + y * (y - 1))
 
+# --- ràng buộc dưới dạng hàm (signature: variables, values) ---
+def constraint_circle(vars_, vals):
+    x, y = vals
+    return abs(x * x + y * y - 1.0) <= TOL
 
-# --- Ràng buộc ---
-def constraint_circle(x, y):
-    return abs(x * x + y * y - 1.0) <= 1e-9
-
-
-def constraint_linear(x, y):
+def constraint_linear(vars_, vals):
+    x, y = vals
     return x >= 2 * y - 1e-9
 
+# --- xây dựng CspProblem đúng API của SimpleAI ---
+variables = ('x', 'y')
+domains = {'x': grid, 'y': grid}
+constraints = [
+    (('x', 'y'), constraint_circle),
+    (('x', 'y'), constraint_linear),
+]
 
-# --- Tạo miền (domain) ---
-def make_grid(minv=GRID_MIN, maxv=GRID_MAX, step=GRID_STEP):
-    n = int(round((maxv - minv) / step))
-    return [round(minv + i * step, 10) for i in range(n + 1)]
+problem = CspProblem(variables, domains, constraints)
 
+# --- enumerate mọi nghiệm hợp lệ: chạy backtrack lặp và thêm ràng buộc chặn nghiệm đã tìm ---
+solutions = []
+while True:
+    sol = backtrack(problem,
+                    variable_heuristic=MOST_CONSTRAINED_VARIABLE,
+                    value_heuristic=LEAST_CONSTRAINING_VALUE,
+                    inference=True)  # inference=True => AC3
+    if not sol:
+        break
+    solutions.append(sol)
 
-# --- Hàm hỗ trợ để prune miền ban đầu bằng kiểm tra cặp khả dĩ ---
-def prune_initial_domains(domains):
-    newd = {'x': [], 'y': []}
-    for xv in domains['x']:
-        ok = False
-        for yv in domains['y']:
-            if constraint_circle(xv, yv) and constraint_linear(xv, yv):
-                ok = True
-                break
-        if ok:
-            newd['x'].append(xv)
-    for yv in domains['y']:
-        ok = False
-        for xv in domains['x']:
-            if constraint_circle(xv, yv) and constraint_linear(xv, yv):
-                ok = True
-                break
-        if ok:
-            newd['y'].append(yv)
-    return newd
+    # thêm ràng buộc chặn nghiệm vừa tìm (block this exact (x,y))
+    tx = sol['x']; ty = sol['y']
+    def make_blocker(tx_val, ty_val):
+        def blocker(vars_, vals):
+            x, y = vals
+            # trả về False (vi phạm) nếu đúng là nghiệm đã tìm; True ngược lại
+            return not (abs(x - tx_val) < 1e-9 and abs(y - ty_val) < 1e-9)
+        return blocker
+    problem.constraints.append((('x', 'y'), make_blocker(tx, ty)))
 
+# --- in kết quả và chọn cực tiểu theo f ---
+evaluated = [(f_val(s['x'], s['y']), s['x'], s['y']) for s in solutions]
+evaluated.sort(key=lambda t: t[0])
 
-# --- AC-3 (arc consistency) ---
-def pair_satisfies(x, y):
-    return constraint_circle(x, y) and constraint_linear(x, y)
+print("Tổng nghiệm hợp lệ (từ SimpleAI):", len(evaluated))
+for val, x, y in evaluated:
+    print(f"  (x={x}, y={y}) -> f={val}")
 
+if evaluated:
+    minval = evaluated[0][0]
+    minimizers = [(x, y) for f_, x, y in evaluated if abs(f_ - minval) <= 1e-9]
+    print("\nGiá trị nhỏ nhất f =", minval)
+    print("Điểm cực tiểu (hợp lệ):", minimizers)
+else:
+    print("Không tìm được nghiệm nào thoả ràng buộc.")
 
-def revise(D, Xi, Xj):
-    """
-    Revise domain D[Xi] w.r.t D[Xj]. Return True if revised (some values removed).
-    Xi, Xj in {'x','y'}.
-    """
-    revised = False
-    to_remove = []
-    for a in list(D[Xi]):
-        found = False
-        for b in D[Xj]:
-            # build pair (a,b) according to which var is Xi/Xj
-            if Xi == 'x':
-                x = a; y = b
-            else:
-                x = b; y = a
-            if pair_satisfies(x, y):
-                found = True
-                break
-        if not found:
-            to_remove.append(a)
-            revised = True
-    for a in to_remove:
-        D[Xi].remove(a)
-    return revised
+# --- VẼ trực quan: mặt 3D + các điểm lý thuyết + nghiệm hợp lệ ---
+X = np.linspace(-5, 5, 240)
+Y = np.linspace(-5, 5, 240)
+X, Y = np.meshgrid(X, Y)
+Z = np.abs((X + 1) * (X - 1) * (X - 2) + Y * (Y - 1))
 
+fig = plt.figure(figsize=(11, 7))
+ax = fig.add_subplot(111, projection='3d')
+ax.plot_surface(X, Y, Z, cmap='viridis', alpha=0.75)
 
-def ac3(domains):
-    """
-    Enforce AC-3 on domains (dict with 'x' and 'y'). Return pruned domains copy,
-    or None if failure (domain becomes empty).
-    """
-    D = deepcopy(domains)
-    queue = [('x', 'y'), ('y', 'x')]
-    while queue:
-        Xi, Xj = queue.pop(0)
-        if revise(D, Xi, Xj):
-            if len(D[Xi]) == 0:
-                return None
-            # add arcs (Xk, Xi) for all Xk != Xi,Xj
-            for Xk in ['x', 'y']:
-                if Xk != Xi and Xk != Xj:
-                    queue.append((Xk, Xi))
-    return D
+# 4 cực tiểu "lý thuyết" (từ đề bài, chưa xét ràng buộc)
+theoretical_minima = [(1,1), (1,0), (2,1), (2,0)]
+for xx, yy in theoretical_minima:
+    ax.scatter(xx, yy, f_val(xx, yy), color='red', s=60)
 
+# nghiệm hợp lệ tìm được
+for _, x, y in evaluated:
+    ax.scatter(x, y, f_val(x, y), color='blue', s=100, marker='^')
 
-# --- Backtracking search ---
-def select_variable(assignment, domains, MRV=True):
-    unassigned = [v for v in ['x', 'y'] if v not in assignment]
-    if not unassigned:
-        return None
-    if MRV:
-        return min(unassigned, key=lambda v: len(domains[v]))
-    return unassigned[0]
-
-
-def value_ordering(var, domains, assignment, value_ordering=True):
-    vals = list(domains[var])
-    if not value_ordering:
-        return vals
-
-    # Heuristic: nếu cả hai biến chưa gán, ước lượng f bằng cách thử tất cả giá trị của biến kia
-    other = 'y' if var == 'x' else 'x'
-    def estimate(val):
-        tmp = dict(assignment)
-        tmp[var] = val
-        if 'x' in tmp and 'y' in tmp:
-            return f_val(tmp['x'], tmp['y'])
-        estimates = []
-        for cand in domains[other]:
-            tx = tmp['x'] if 'x' in tmp else (val if var == 'x' else cand)
-            ty = tmp['y'] if 'y' in tmp else (val if var == 'y' else cand)
-            if constraint_circle(tx, ty) and constraint_linear(tx, ty):
-                estimates.append(f_val(tx, ty))
-        return min(estimates) if estimates else float('inf')
-
-    vals.sort(key=estimate)
-    return vals
-
-
-def backtrack(domains, assignment=None, MRV=True, AC3_enabled=True, value_ordering_enabled=True):
-    if assignment is None:
-        assignment = {}
-    # If complete
-    if set(assignment.keys()) == {'x', 'y'}:
-        return [assignment.copy()]
-
-    # Optionally run AC3 to prune domains
-    if AC3_enabled:
-        D = ac3(domains)
-        if D is None:
-            return []
-    else:
-        D = deepcopy(domains)
-
-    var = select_variable(assignment, D, MRV=MRV)
-    solutions = []
-    for val in value_ordering(var, D, assignment, value_ordering_enabled):
-        # consistency check with current assignment
-        tmp = dict(assignment)
-        tmp[var] = val
-        consistent = True
-        if 'x' in tmp and 'y' in tmp:
-            if not pair_satisfies(tmp['x'], tmp['y']):
-                consistent = False
-        if not consistent:
-            continue
-        # forward-check: set domain of var to [val]
-        newD = deepcopy(D)
-        newD[var] = [val]
-        sols = backtrack(newD, tmp, MRV=MRV, AC3_enabled=AC3_enabled, value_ordering_enabled=value_ordering_enabled)
-        solutions.extend(sols)
-    return solutions
-
-
-# --- Main chạy ---
-def main():
-    grid = make_grid()
-    domains = {'x': grid[:], 'y': grid[:]}
-    domains = prune_initial_domains(domains)
-
-    # Cấu hình tìm kiếm (bạn có thể thay đổi True/False)
-    MRV = True
-    AC3_enabled = True
-    value_ordering_enabled = True
-
-    sols = backtrack(domains, assignment=None, MRV=MRV, AC3_enabled=AC3_enabled, value_ordering_enabled=value_ordering_enabled)
-
-    # Loại nghiệm trùng lặp (nếu có) và sắp theo f
-    unique = []
-    seen = set()
-    for s in sols:
-        t = (round(s['x'], 10), round(s['y'], 10))
-        if t not in seen:
-            seen.add(t)
-            unique.append(s)
-    evaluated = [(f_val(s['x'], s['y']), s['x'], s['y']) for s in unique]
-    evaluated.sort(key=lambda t: t[0])
-
-    print("Tổng nghiệm hợp lệ tìm được:", len(evaluated))
-    for val, x, y in evaluated:
-        print(f"  (x={x}, y={y}) -> f={val}")
-    if evaluated:
-        minval = evaluated[0][0]
-        minimizers = [(x, y) for (f_, x, y) in evaluated if abs(f_ - minval) <= 1e-9]
-        print("\nGiá trị nhỏ nhất f =", minval)
-        print("Điểm tối ưu (minimizer):", minimizers)
-    else:
-        print("Không tìm được nghiệm nào thoả ràng buộc.")
-
-    # (Tùy chọn) in thêm toàn bộ các điểm trên lưới thoả ràng buộc để kiểm tra brute-force
-    brute = []
-    for x, y in product(grid, grid):
-        if constraint_circle(x, y) and constraint_linear(x, y):
-            brute.append((x, y, f_val(x, y)))
-    brute.sort(key=lambda t: t[2])
-    print("\nDanh sách các điểm thoả ràng buộc (brute-force) sắp theo f:")
-    for x, y, fv in brute:
-        print(f"  (x={x}, y={y}) -> f={fv}")
-
-
-if __name__ == "__main__":
-    main()
+ax.set_title("Mặt f(x,y) và các điểm: đỏ=4 cực tiểu lý thuyết, xanh=nghiệm hợp lệ (CSP)")
+ax.set_xlabel("x"); ax.set_ylabel("y"); ax.set_zlabel("f(x,y)")
+plt.show()
